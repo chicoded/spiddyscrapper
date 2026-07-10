@@ -1,4 +1,6 @@
+.gitignore
 downloads/
+jobs/
 node_modules/
 __pycache__/
 *.pyc

@@ -28,6 +28,20 @@ python main.py
 
 Open **http://localhost:8000** in your browser.
 
+## Deploy
+
+### Vercel (fixes 404)
+
+1. Import [chicoded/spiddyscrapper](https://github.com/chicoded/spiddyscrapper) on [vercel.com](https://vercel.com)
+2. Deploy — `vercel.json` routes all requests to the Express API
+3. Note: Vercel has a **60s timeout** — use a chapter limit for long novels
+
+### Render (recommended for full scraping)
+
+1. Go to [render.com](https://render.com) → New → Blueprint
+2. Connect the GitHub repo — uses `render.yaml` automatically
+3. No timeout limits — best for downloading full novels
+
 ## Usage
 
 1. Paste one or more novel URLs (one per line)

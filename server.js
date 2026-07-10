@@ -6,39 +6,71 @@ import { fileURLToPath } from "url";
 import { ScrapeEngine, exportNovel, sanitizeFilename } from "./scraper.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const IS_VERCEL = !!process.env.VERCEL;
+const DATA_ROOT = IS_VERCEL ? "/tmp/spiddyscapper" : __dirname;
 const STATIC_DIR = path.join(__dirname, "static");
-const DOWNLOADS_DIR = path.join(__dirname, "downloads");
+const DOWNLOADS_DIR = path.join(DATA_ROOT, "downloads");
+const JOBS_DIR = path.join(DATA_ROOT, "jobs");
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use("/static", express.static(STATIC_DIR));
 
-const jobs = new Map();
+async function ensureDirs() {
+  await fs.mkdir(DOWNLOADS_DIR, { recursive: true });
+  await fs.mkdir(JOBS_DIR, { recursive: true });
+}
+
+async function getJob(jobId) {
+  try {
+    const raw = await fs.readFile(path.join(JOBS_DIR, `${jobId}.json`), "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function saveJob(jobId, job) {
+  await fs.writeFile(path.join(JOBS_DIR, `${jobId}.json`), JSON.stringify(job));
+}
 
 app.get("/", (_req, res) => {
   res.sendFile(path.join(STATIC_DIR, "index.html"));
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", name: "SpiddyScapper" });
+  res.json({ status: "ok", name: "SpiddyScapper", platform: IS_VERCEL ? "vercel" : "node" });
 });
 
-app.post("/api/scrape", (req, res) => {
+app.post("/api/scrape", async (req, res) => {
   const { urls, concurrency = 15, chapter_limit, format = "txt" } = req.body;
 
   if (!urls?.length) {
     return res.status(400).json({ error: "At least one URL required" });
   }
 
+  await ensureDirs();
   const jobId = uuidv4().slice(0, 8);
-  jobs.set(jobId, { status: "running", results: [], progress: [] });
+  await saveJob(jobId, { status: "running", results: [], progress: [] });
 
-  runScrapeJob(jobId, { urls, concurrency, chapter_limit, format });
+  const jobPromise = runScrapeJob(jobId, { urls, concurrency, chapter_limit, format });
+
+  if (IS_VERCEL) {
+    try {
+      const { waitUntil } = await import("@vercel/functions");
+      waitUntil(jobPromise);
+    } catch {
+      await jobPromise;
+    }
+  } else {
+    jobPromise.catch((err) => console.error("Scrape job failed:", err));
+  }
+
   res.json({ job_id: jobId, message: `Scraping ${urls.length} novel(s)` });
 });
 
-app.get("/api/scrape/:jobId/stream", (req, res) => {
-  const job = jobs.get(req.params.jobId);
+app.get("/api/scrape/:jobId/stream", async (req, res) => {
+  const job = await getJob(req.params.jobId);
   if (!job) return res.status(404).json({ error: "Job not found" });
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -46,8 +78,8 @@ app.get("/api/scrape/:jobId/stream", (req, res) => {
   res.setHeader("Connection", "keep-alive");
 
   let lastLen = 0;
-  const interval = setInterval(() => {
-    const current = jobs.get(req.params.jobId);
+  const interval = setInterval(async () => {
+    const current = await getJob(req.params.jobId);
     if (!current) {
       clearInterval(interval);
       res.end();
@@ -72,8 +104,8 @@ app.get("/api/scrape/:jobId/stream", (req, res) => {
   req.on("close", () => clearInterval(interval));
 });
 
-app.get("/api/scrape/:jobId/status", (req, res) => {
-  const job = jobs.get(req.params.jobId);
+app.get("/api/scrape/:jobId/status", async (req, res) => {
+  const job = await getJob(req.params.jobId);
   if (!job) return res.status(404).json({ error: "Job not found" });
   res.json(job);
 });
@@ -91,6 +123,7 @@ app.get("/api/download/:jobId/:filename", async (req, res) => {
 app.post("/api/scrape/sync", async (req, res) => {
   const { urls, concurrency = 15, chapter_limit, format = "txt" } = req.body;
   const engine = new ScrapeEngine(concurrency);
+  await ensureDirs();
   const jobId = uuidv4().slice(0, 8);
   const outputDir = path.join(DOWNLOADS_DIR, jobId);
   await fs.mkdir(outputDir, { recursive: true });
@@ -118,14 +151,14 @@ async function runScrapeJob(jobId, { urls, concurrency, chapter_limit, format })
   const engine = new ScrapeEngine(concurrency);
   const outputDir = path.join(DOWNLOADS_DIR, jobId);
   await fs.mkdir(outputDir, { recursive: true });
-  const job = jobs.get(jobId);
+  const job = (await getJob(jobId)) || { status: "running", results: [], progress: [] };
 
   try {
     for (const rawUrl of urls) {
       const url = rawUrl.trim();
       if (!url) continue;
 
-      const onProgress = (p) => {
+      const onProgress = async (p) => {
         job.progress.push({
           type: "progress",
           url,
@@ -135,6 +168,7 @@ async function runScrapeJob(jobId, { urls, concurrency, chapter_limit, format })
           current: p.current_chapter,
           status: p.status,
         });
+        await saveJob(jobId, job);
       };
 
       const result = await engine.scrapeNovel(url, onProgress, chapter_limit);
@@ -153,19 +187,25 @@ async function runScrapeJob(jobId, { urls, concurrency, chapter_limit, format })
       } else {
         job.results.push({ title: "Error", error: result.error, url });
       }
+      await saveJob(jobId, job);
     }
 
     job.status = "completed";
+    await saveJob(jobId, job);
   } catch (err) {
     job.status = "failed";
     job.error = err.message;
+    await saveJob(jobId, job);
   }
 }
 
-const PORT = process.env.PORT || 8000;
+await ensureDirs();
 
-await fs.mkdir(DOWNLOADS_DIR, { recursive: true });
+if (!IS_VERCEL) {
+  const PORT = process.env.PORT || 8000;
+  app.listen(PORT, () => {
+    console.log(`SpiddyScapper running at http://localhost:${PORT}`);
+  });
+}
 
-app.listen(PORT, () => {
-  console.log(`SpiddyScapper running at http://localhost:${PORT}`);
-});
+export default app;
