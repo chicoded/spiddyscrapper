@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SpiddyScapper — Fast Webnovel Downloader</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="container">
+    <header class="header">
+      <div class="logo">
+        <span class="logo-icon">🕷️</span>
+        <div>
+          <h1>SpiddyScapper</h1>
+          <p class="tagline">Download webnovels blazing fast</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="card input-card">
+        <h2>Paste Novel Links</h2>
+        <p class="hint">One URL per line. Supports Royal Road, NovelFull, NovelBin, WebNovel, and more.</p>
+        <textarea
+          id="urls"
+          placeholder="https://www.royalroad.com/fiction/12345/my-novel&#10;https://novelfull.com/novel-slug.html&#10;https://novelbin.com/b/novel-name"
+          rows="6"
+        ></textarea>
+
+        <div class="options">
+          <div class="option">
+            <label for="concurrency">Speed (parallel downloads)</label>
+            <div class="range-wrap">
+              <input type="range" id="concurrency" min="5" max="50" value="20" />
+              <span id="concurrency-val">20</span>
+            </div>
+          </div>
+          <div class="option">
+            <label for="chapter-limit">Chapter limit (optional)</label>
+            <input type="number" id="chapter-limit" placeholder="All chapters" min="1" />
+          </div>
+          <div class="option">
+            <label for="format">Export format</label>
+            <select id="format">
+              <option value="txt">TXT (plain text)</option>
+              <option value="epub">EPUB (e-reader)</option>
+              <option value="json">JSON (structured)</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="scrape-btn" class="btn-primary">
+          <span class="btn-text">Start Download</span>
+          <span class="btn-loader hidden"></span>
+        </button>
+      </section>
+
+      <section id="progress-section" class="card progress-card hidden">
+        <h2>Download Progress</h2>
+        <div id="progress-list"></div>
+      </section>
+
+      <section id="results-section" class="card results-card hidden">
+        <h2>Downloads Ready</h2>
+        <div id="results-list"></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>Built for speed with async parallel scraping. Use responsibly and respect site terms of service.</p>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
