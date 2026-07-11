@@ -310,26 +310,17 @@ const freeWebNovelParser = {
     }
 
     if (totalPage > 1) {
-      const pLimit = (await import("p-limit")).default;
-      const limit = pLimit(8);
-      const pages = Array.from({ length: totalPage - 1 }, (_, i) => i + 2);
+      for (let page = 2; page <= totalPage; page++) {
+        const ajaxUrl = new URL(url);
+        ajaxUrl.searchParams.set("ajax", "chapters");
+        ajaxUrl.searchParams.set("page", String(page));
+        ajaxUrl.searchParams.set("pageSize", String(pageSize));
 
-      const pageHtmls = await Promise.all(
-        pages.map((page) =>
-          limit(async () => {
-            const ajaxUrl = new URL(url);
-            ajaxUrl.searchParams.set("ajax", "chapters");
-            ajaxUrl.searchParams.set("page", String(page));
-            ajaxUrl.searchParams.set("pageSize", String(pageSize));
-
-            const data = await fetchJson(ajaxUrl.toString(), { Referer: url });
-            return data?.code === 200 ? data.html : null;
-          })
-        )
-      );
-
-      for (const pageHtml of pageHtmls) {
-        if (pageHtml) addFromHtml(pageHtml);
+        const data = await fetchJson(ajaxUrl.toString(), { Referer: url });
+        if (data?.code === 200 && data.html) {
+          addFromHtml(data.html);
+        }
+        if (chapterLimit && chapters.length >= chapterLimit) break;
       }
     }
 

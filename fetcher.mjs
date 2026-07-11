@@ -24,9 +24,25 @@ const CLOUDFLARE_DOMAINS = [
   "novelfull.net",
 ];
 
+const RATE_LIMIT_MS = 350;
+const lastRequestByHost = new Map();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function hostNeedsScraping(url) {
   const host = new URL(url).hostname.replace(/^www\./, "");
   return CLOUDFLARE_DOMAINS.some((d) => host === d || host.endsWith("." + d));
+}
+
+async function throttle(url) {
+  if (!hostNeedsScraping(url)) return;
+  const host = new URL(url).hostname;
+  const last = lastRequestByHost.get(host) || 0;
+  const wait = RATE_LIMIT_MS - (Date.now() - last);
+  if (wait > 0) await sleep(wait);
+  lastRequestByHost.set(host, Date.now());
 }
 
 function isCloudflareChallenge(html) {
@@ -37,49 +53,54 @@ function isCloudflareChallenge(html) {
   );
 }
 
+async function fetchWithScraping(url, headers, maxRetries = 6) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    await throttle(url);
+
+    const response = await gotScraping({
+      url,
+      headers,
+      timeout: { request: 60000 },
+      throwHttpErrors: false,
+      retry: { limit: 0 },
+    });
+
+    if (response.statusCode === 429 || response.statusCode === 503) {
+      const wait = Math.min(60000, 3000 * Math.pow(2, attempt));
+      await sleep(wait);
+      continue;
+    }
+
+    if (response.statusCode >= 400) {
+      throw new Error(`HTTP ${response.statusCode} for ${url}`);
+    }
+
+    return response.body;
+  }
+
+  throw new Error(`HTTP 429 (rate limited) for ${url} — try again later or lower --speed`);
+}
+
 export async function fetchHtml(url, extraHeaders = {}) {
   const headers = { ...BROWSER_HEADERS, ...extraHeaders };
   const useScraping = hostNeedsScraping(url);
 
   if (useScraping) {
-    const response = await gotScraping({
-      url,
-      headers,
-      timeout: { request: 45000 },
-      retry: { limit: 2 },
-    });
-    if (response.statusCode >= 400) {
-      throw new Error(`HTTP ${response.statusCode} for ${url}`);
-    }
-    return response.body;
+    return fetchWithScraping(url, headers);
   }
 
+  await throttle(url);
   const res = await fetch(url, { headers, redirect: "follow" });
   if (!res.ok) {
-    if (res.status === 403) {
-      const body = await gotScraping({
-        url,
-        headers,
-        timeout: { request: 45000 },
-        retry: { limit: 2 },
-      });
-      if (body.statusCode >= 400) {
-        throw new Error(`HTTP ${body.statusCode} for ${url}`);
-      }
-      return body.body;
+    if (res.status === 403 || res.status === 429) {
+      return fetchWithScraping(url, headers);
     }
     throw new Error(`HTTP ${res.status} for ${url}`);
   }
 
   const html = await res.text();
   if (isCloudflareChallenge(html)) {
-    const response = await gotScraping({
-      url,
-      headers,
-      timeout: { request: 45000 },
-      retry: { limit: 2 },
-    });
-    return response.body;
+    return fetchWithScraping(url, headers);
   }
 
   return html;

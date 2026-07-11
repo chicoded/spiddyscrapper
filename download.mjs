@@ -17,7 +17,7 @@ Usage:
 Options:
   --output, -o   Folder to save books (default: ./downloads)
   --format, -f   txt or json (default: txt)
-  --speed, -s    Parallel downloads 1-50 (default: 20)
+  --speed, -s    Parallel downloads 1-50 (default: 12, lower if rate limited)
   --limit, -l    Only download first N chapters (for testing)
   --file         Text file with one URL per line
   --help, -h     Show this help
@@ -33,7 +33,7 @@ function parseArgs(argv) {
     urls: [],
     output: DEFAULT_OUTPUT,
     format: "txt",
-    concurrency: 20,
+    concurrency: 12,
     file: null,
     chapterLimit: null,
   };
