@@ -28,6 +28,32 @@ python main.py
 
 Open **http://localhost:8000** in your browser.
 
+## Download full books locally (recommended)
+
+For complete novels (thousands of chapters), use the **local downloader** — files save to your PC in the `downloads` folder.
+
+```bash
+npm install
+
+# Download one full book
+npm run download -- "https://freewebnovel.com/novel/infinite-mana-in-the-apocalypse"
+
+# Save to a custom folder
+npm run download -- -o "C:\Users\HP\Books" -s 25 "https://freewebnovel.com/novel/your-novel"
+
+# Multiple books at once
+npm run download -- "url1" "url2" "url3"
+```
+
+Options:
+- `-o` / `--output` — folder on your PC (default: `./downloads`)
+- `-s` / `--speed` — parallel chapter downloads, 1–50 (default: 20)
+- `-f` / `--format` — `txt` or `json`
+
+Large novels (5000+ chapters) can take 1–3 hours. Keep the terminal open until it finishes.
+
+**Do not use Vercel for full books** — it has a 60 second timeout. Use local download instead.
+
 ## Deploy
 
 ### Vercel (fixes 404)
