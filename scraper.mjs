@@ -270,7 +270,7 @@ const webNovelParser = {
 const freeWebNovelParser = {
   name: "freewebnovel",
   domains: ["freewebnovel.com"],
-  async getNovelInfo(url, chapterLimit) {
+  async getNovelInfo(url, chapterLimit, onListProgress) {
     const html = await fetchHtml(url);
     const $ = cheerio.load(html);
 
@@ -311,8 +311,9 @@ const freeWebNovelParser = {
 
     if (totalPage > 1) {
       const pLimit = (await import("p-limit")).default;
-      const listLimit = pLimit(12);
+      const listLimit = pLimit(8);
       const pages = Array.from({ length: totalPage - 1 }, (_, i) => i + 2);
+      let listDone = 0;
 
       const pageHtmls = await Promise.all(
         pages.map((page) =>
@@ -322,6 +323,8 @@ const freeWebNovelParser = {
             ajaxUrl.searchParams.set("page", String(page));
             ajaxUrl.searchParams.set("pageSize", String(pageSize));
             const data = await fetchJson(ajaxUrl.toString(), { Referer: url });
+            listDone++;
+            if (onListProgress) onListProgress(listDone, pages.length);
             return data?.code === 200 ? data.html : null;
           })
         )
@@ -393,7 +396,17 @@ export class ScrapeEngine {
     const limit = (await import("p-limit")).default(this.concurrency);
 
     try {
-      const novel = await parser.getNovelInfo(url, chapterLimit);
+      const novel = await parser.getNovelInfo(url, chapterLimit, (done, total) => {
+        if (onProgress) {
+          onProgress({
+            novel_title: "Loading chapters...",
+            total_chapters: 0,
+            completed_chapters: 0,
+            current_chapter: `Chapter list ${done}/${total}`,
+            status: "listing",
+          });
+        }
+      });
       if (chapterLimit) novel.chapters = novel.chapters.slice(0, chapterLimit);
 
       const total = novel.chapters.length;

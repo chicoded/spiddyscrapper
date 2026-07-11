@@ -142,7 +142,7 @@ async function downloadNovel(url, options) {
       lastLog = now;
 
       if (progress.total_chapters === 0) {
-        process.stdout.write(`\r   Fetching chapter list...`);
+        process.stdout.write(`\r   ${progress.current_chapter || "Fetching chapter list..."}   `);
         return;
       }
 
