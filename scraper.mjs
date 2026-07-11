@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { fetchHtml, fetchJson } from "./fetcher.mjs";
+import { fetchHtml, fetchJson, configureFetcher } from "./fetcher.mjs";
 
 const CONTENT_SELECTORS = [
   "#chr-content",
@@ -310,17 +310,25 @@ const freeWebNovelParser = {
     }
 
     if (totalPage > 1) {
-      for (let page = 2; page <= totalPage; page++) {
-        const ajaxUrl = new URL(url);
-        ajaxUrl.searchParams.set("ajax", "chapters");
-        ajaxUrl.searchParams.set("page", String(page));
-        ajaxUrl.searchParams.set("pageSize", String(pageSize));
+      const pLimit = (await import("p-limit")).default;
+      const listLimit = pLimit(12);
+      const pages = Array.from({ length: totalPage - 1 }, (_, i) => i + 2);
 
-        const data = await fetchJson(ajaxUrl.toString(), { Referer: url });
-        if (data?.code === 200 && data.html) {
-          addFromHtml(data.html);
-        }
-        if (chapterLimit && chapters.length >= chapterLimit) break;
+      const pageHtmls = await Promise.all(
+        pages.map((page) =>
+          listLimit(async () => {
+            const ajaxUrl = new URL(url);
+            ajaxUrl.searchParams.set("ajax", "chapters");
+            ajaxUrl.searchParams.set("page", String(page));
+            ajaxUrl.searchParams.set("pageSize", String(pageSize));
+            const data = await fetchJson(ajaxUrl.toString(), { Referer: url });
+            return data?.code === 200 ? data.html : null;
+          })
+        )
+      );
+
+      for (const pageHtml of pageHtmls) {
+        if (pageHtml) addFromHtml(pageHtml);
       }
     }
 
@@ -331,8 +339,25 @@ const freeWebNovelParser = {
       chapters: chapterLimit ? chapters.slice(0, chapterLimit) : chapters,
     };
   },
-  async fetchChapter(chapter) {
-    const html = await fetchHtml(chapter.url, { Referer: chapter.url });
+  async fetchChapter(chapter, referer) {
+    const html = await fetchHtml(chapter.url, { Referer: referer || chapter.url });
+    const txtStart = html.indexOf('class="txt"');
+    if (txtStart !== -1) {
+      const $ = cheerio.load(html.slice(txtStart - 5, txtStart + 800000));
+      const content = $("div.txt").first();
+      if (content.length) {
+        content.find("script, style, ins, iframe").remove();
+        const paragraphs = [];
+        content.find("p").each((_, el) => {
+          const text = $(el).text().replace(/\s+/g, " ").trim();
+          if (text) paragraphs.push(text);
+        });
+        if (paragraphs.length) return paragraphs.join("\n\n");
+        const text = content.text().trim();
+        if (text.length > 50) return text;
+      }
+    }
+
     const $ = cheerio.load(html);
     const content = $("div.txt").first();
     if (!content.length) return extractContent($);
@@ -358,11 +383,12 @@ const freeWebNovelParser = {
 const PARSERS = [freeWebNovelParser, royalRoadParser, novelFullParser, webNovelParser, genericParser];
 
 export class ScrapeEngine {
-  constructor(concurrency = 15) {
+  constructor(concurrency = 30) {
     this.concurrency = Math.max(1, Math.min(concurrency, 50));
+    configureFetcher({ maxInflight: this.concurrency });
   }
 
-  async scrapeNovel(url, onProgress, chapterLimit) {
+  async scrapeNovel(url, onProgress, chapterLimit, onChapterReady) {
     const parser = getParserForUrl(url);
     const limit = (await import("p-limit")).default(this.concurrency);
 
@@ -372,6 +398,7 @@ export class ScrapeEngine {
 
       const total = novel.chapters.length;
       let completed = 0;
+      const referer = novel.source_url || url;
 
       const progress = {
         novel_title: novel.title,
@@ -383,14 +410,28 @@ export class ScrapeEngine {
 
       if (onProgress) onProgress(progress);
 
+      const fetchWithRetry = async (chapter) => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            if (parser.fetchChapter.length > 1) {
+              return await parser.fetchChapter(chapter, referer);
+            }
+            return await parser.fetchChapter(chapter);
+          } catch (err) {
+            if (attempt === 2) throw err;
+            await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+          }
+        }
+      };
+
       await Promise.all(
-        novel.chapters.map((chapter) =>
+        novel.chapters.map((chapter, index) =>
           limit(async () => {
             progress.current_chapter = chapter.title;
             if (onProgress) onProgress({ ...progress });
 
             try {
-              chapter.content = await parser.fetchChapter(chapter);
+              chapter.content = await fetchWithRetry(chapter);
             } catch (err) {
               chapter.content = `[Error fetching chapter: ${err.message}]`;
             }
@@ -398,6 +439,7 @@ export class ScrapeEngine {
             completed++;
             progress.completed_chapters = completed;
             if (onProgress) onProgress({ ...progress });
+            if (onChapterReady) await onChapterReady(chapter, index);
           })
         )
       );

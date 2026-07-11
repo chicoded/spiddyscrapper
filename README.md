@@ -47,10 +47,10 @@ npm run download -- "url1" "url2" "url3"
 
 Options:
 - `-o` / `--output` — folder on your PC (default: `./downloads`)
-- `-s` / `--speed` — parallel chapter downloads, 1–50 (default: 20)
+- `-s` / `--speed` — parallel chapter downloads, 1–50 (default: 35)
 - `-f` / `--format` — `txt` or `json`
 
-Large novels (5000+ chapters) can take 1–3 hours. Keep the terminal open until it finishes.
+Large novels (5000+ chapters) take about **15–30 minutes** locally at default speed. Keep the terminal open until it finishes.
 
 **Do not use Vercel for full books** — it has a 60 second timeout. Use local download instead.
 

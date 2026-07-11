@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import { ScrapeEngine, exportNovel, sanitizeFilename, getParserForUrl } from "./scraper.mjs";
+import { ScrapeEngine, sanitizeFilename, getParserForUrl } from "./scraper.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_OUTPUT = path.join(__dirname, "downloads");
@@ -17,14 +17,14 @@ Usage:
 Options:
   --output, -o   Folder to save books (default: ./downloads)
   --format, -f   txt or json (default: txt)
-  --speed, -s    Parallel downloads 1-50 (default: 12, lower if rate limited)
+  --speed, -s    Parallel downloads 1-50 (default: 35)
   --limit, -l    Only download first N chapters (for testing)
   --file         Text file with one URL per line
   --help, -h     Show this help
 
 Examples:
   node download.mjs "https://freewebnovel.com/novel/infinite-mana-in-the-apocalypse"
-  node download.mjs -o "C:\\Users\\HP\\Books" -s 25 "https://www.royalroad.com/fiction/21220/mother-of-learning"
+  node download.mjs -o "C:\\Users\\HP\\Books" -s 40 "https://www.royalroad.com/fiction/21220/mother-of-learning"
 `);
 }
 
@@ -33,7 +33,7 @@ function parseArgs(argv) {
     urls: [],
     output: DEFAULT_OUTPUT,
     format: "txt",
-    concurrency: 12,
+    concurrency: 35,
     file: null,
     chapterLimit: null,
   };
@@ -78,7 +78,18 @@ function drawProgress(label, completed, total, startedAt) {
   const elapsed = (Date.now() - startedAt) / 1000;
   const rate = completed > 0 ? elapsed / completed : 0;
   const eta = formatEta((total - completed) * rate);
-  process.stdout.write(`\r${label} [${bar}] ${completed}/${total} (${pct}%) ETA ${eta}   `);
+  const speed = completed > 0 ? (completed / elapsed).toFixed(1) : "0";
+  process.stdout.write(`\r${label} [${bar}] ${completed}/${total} (${pct}%) ${speed} ch/s ETA ${eta}   `);
+}
+
+function formatChapterBlock(chapter) {
+  return [
+    `Chapter ${chapter.number}: ${chapter.title}`,
+    "-".repeat(40),
+    chapter.content || "[No content]",
+    "",
+    "",
+  ].join("\n");
 }
 
 async function loadUrlsFromFile(filepath) {
@@ -95,39 +106,98 @@ async function downloadNovel(url, options) {
   const startedAt = Date.now();
 
   console.log(`\n📖 ${url}`);
-  console.log(`   Parser: ${parserName} | Saving to: ${options.output}`);
+  console.log(`   Parser: ${parserName} | Threads: ${options.concurrency} | Saving to: ${options.output}`);
+
+  await fs.mkdir(options.output, { recursive: true });
+  const ext = options.format === "json" ? "json" : "txt";
+  const tempPath = path.join(options.output, `.downloading-${Date.now()}.tmp`);
+  let filepath = tempPath;
+
+  await fs.writeFile(tempPath, "", "utf-8");
+
+  const ready = [];
+  let nextWrite = 0;
+  let writeChain = Promise.resolve();
+
+  const flushInOrder = () => {
+    writeChain = writeChain.then(async () => {
+      while (ready[nextWrite]) {
+        const chapter = ready[nextWrite];
+        if (options.format !== "json") {
+          await fs.appendFile(tempPath, formatChapterBlock(chapter), "utf-8");
+        }
+        nextWrite++;
+      }
+    });
+    return writeChain;
+  };
 
   let lastLog = 0;
-  const result = await engine.scrapeNovel(url, (progress) => {
-    const now = Date.now();
-    if (now - lastLog < 200 && progress.status !== "completed") return;
-    lastLog = now;
 
-    if (progress.total_chapters === 0) {
-      process.stdout.write(`\r   Fetching chapter list...`);
-      return;
+  const result = await engine.scrapeNovel(
+    url,
+    (progress) => {
+      const now = Date.now();
+      if (now - lastLog < 150 && progress.status !== "completed") return;
+      lastLog = now;
+
+      if (progress.total_chapters === 0) {
+        process.stdout.write(`\r   Fetching chapter list...`);
+        return;
+      }
+
+      drawProgress("   Downloading", progress.completed_chapters, progress.total_chapters, startedAt);
+    },
+    options.chapterLimit,
+    async (chapter, index) => {
+      ready[index] = chapter;
+      await flushInOrder();
     }
-
-    drawProgress("   Downloading", progress.completed_chapters, progress.total_chapters, startedAt);
-  }, options.chapterLimit);
+  );
 
   process.stdout.write("\n");
 
   if (!result.success) {
     console.error(`   ❌ Failed: ${result.error}`);
+    try {
+      await fs.unlink(tempPath);
+    } catch {
+      /* ignore */
+    }
     return null;
   }
 
-  await fs.mkdir(options.output, { recursive: true });
-  const ext = options.format === "json" ? "json" : "txt";
   const filename = `${sanitizeFilename(result.novel.title)}.${ext}`;
-  const filepath = path.join(options.output, filename);
+  filepath = path.join(options.output, filename);
 
-  await fs.writeFile(filepath, exportNovel(result.novel, options.format), "utf-8");
+  if (options.format === "json") {
+    const { exportNovel } = await import("./scraper.mjs");
+    await fs.writeFile(filepath, exportNovel(result.novel, "json"), "utf-8");
+    try {
+      await fs.unlink(tempPath);
+    } catch {
+      /* ignore */
+    }
+  } else {
+    const header = [
+      result.novel.title,
+      `Author: ${result.novel.author}`,
+      `Source: ${result.novel.source_url}`,
+      "",
+      "=".repeat(60),
+      "",
+    ].join("\n");
+
+    await flushInOrder();
+    const body = await fs.readFile(tempPath, "utf-8");
+    await fs.writeFile(filepath, header + body, "utf-8");
+    await fs.unlink(tempPath);
+  }
 
   const elapsed = ((Date.now() - startedAt) / 1000 / 60).toFixed(1);
+  const speed = (result.novel.chapters.length / ((Date.now() - startedAt) / 1000)).toFixed(1);
   console.log(`   ✅ Saved: ${filepath}`);
-  console.log(`   ${result.novel.chapters.length} chapters in ${elapsed} min`);
+  console.log(`   ${result.novel.chapters.length} chapters in ${elapsed} min (${speed} ch/s)`);
 
   return filepath;
 }
@@ -152,7 +222,7 @@ async function main() {
 
   console.log("🕷️  SpiddyScapper — Local full book download");
   console.log(`   Books folder: ${options.output}`);
-  console.log(`   Parallel speed: ${options.concurrency}`);
+  console.log(`   Parallel threads: ${options.concurrency}`);
 
   const saved = [];
   for (const url of options.urls) {
