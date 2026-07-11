@@ -55,6 +55,7 @@ Open **http://localhost:8000** in your browser.
 
 | Site | Example |
 |------|---------|
+| FreeWebNovel | freewebnovel.com |
 | Royal Road | royalroad.com |
 | NovelFull | novelfull.com, novelfull.net |
 | NovelBin | novelbin.com, novelbin.me |

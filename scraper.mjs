@@ -1,12 +1,5 @@
-import { fetch } from "undici";
 import * as cheerio from "cheerio";
-
-const DEFAULT_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9",
-};
+import { fetchHtml, fetchJson } from "./fetcher.mjs";
 
 const CONTENT_SELECTORS = [
   "#chr-content",
@@ -37,12 +30,6 @@ export function getParserForUrl(url) {
     }
   }
   return genericParser;
-}
-
-async function fetchHtml(url) {
-  const res = await fetch(url, { headers: DEFAULT_HEADERS, redirect: "follow" });
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  return res.text();
 }
 
 function absoluteUrl(base, href) {
@@ -280,7 +267,93 @@ const webNovelParser = {
   },
 };
 
-const PARSERS = [royalRoadParser, novelFullParser, webNovelParser, genericParser];
+const freeWebNovelParser = {
+  name: "freewebnovel",
+  domains: ["freewebnovel.com"],
+  async getNovelInfo(url, chapterLimit) {
+    const html = await fetchHtml(url);
+    const $ = cheerio.load(html);
+
+    const title = $("h1").first().text().trim() || "Untitled";
+    const authorMatch = html.match(/author\s+([^",]+)/i);
+    const author = authorMatch?.[1]?.trim() || $("meta[name='author']").attr("content")?.trim() || "Unknown";
+
+    const totalPageMatch = html.match(/totalPage:\s*(\d+)/);
+    const pageSizeMatch = html.match(/pageSize:\s*(\d+)/);
+    const totalPage = totalPageMatch ? parseInt(totalPageMatch[1], 10) : 1;
+    const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 40;
+
+    const chapters = [];
+    const seen = new Set();
+
+    const addFromHtml = (pageHtml) => {
+      const page$ = cheerio.load(pageHtml);
+      page$("a[href*='chapter']").each((_, el) => {
+        const href = page$(el).attr("href")?.trim();
+        const text = page$(el).attr("title")?.trim() || page$(el).text().trim();
+        if (!href || !text) return;
+        const full = absoluteUrl(url, href);
+        if (seen.has(full)) return;
+        seen.add(full);
+        chapters.push({
+          number: chapters.length + 1,
+          title: text,
+          url: full,
+          content: "",
+        });
+      });
+    };
+
+    addFromHtml($("#idData").html() || "");
+    if (chapterLimit && chapters.length >= chapterLimit) {
+      return { title, author, source_url: url, chapters: chapters.slice(0, chapterLimit) };
+    }
+
+    for (let page = 2; page <= totalPage; page++) {
+      const ajaxUrl = new URL(url);
+      ajaxUrl.searchParams.set("ajax", "chapters");
+      ajaxUrl.searchParams.set("page", String(page));
+      ajaxUrl.searchParams.set("pageSize", String(pageSize));
+
+      const data = await fetchJson(ajaxUrl.toString(), { Referer: url });
+      if (data?.code === 200 && data.html) {
+        addFromHtml(data.html);
+      }
+      if (chapterLimit && chapters.length >= chapterLimit) break;
+    }
+
+    return {
+      title,
+      author,
+      source_url: url,
+      chapters: chapterLimit ? chapters.slice(0, chapterLimit) : chapters,
+    };
+  },
+  async fetchChapter(chapter) {
+    const html = await fetchHtml(chapter.url, { Referer: chapter.url });
+    const $ = cheerio.load(html);
+    const content = $("div.txt").first();
+    if (!content.length) return extractContent($);
+
+    content.find("script, style, ins, iframe, [class*='ads']").remove();
+    const paragraphs = [];
+    content.find("p").each((_, el) => {
+      const text = $(el).text().replace(/\s+/g, " ").trim();
+      if (text) paragraphs.push(text);
+    });
+
+    if (paragraphs.length) return paragraphs.join("\n\n");
+
+    return content
+      .text()
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n\n");
+  },
+};
+
+const PARSERS = [freeWebNovelParser, royalRoadParser, novelFullParser, webNovelParser, genericParser];
 
 export class ScrapeEngine {
   constructor(concurrency = 15) {
@@ -292,7 +365,7 @@ export class ScrapeEngine {
     const limit = (await import("p-limit")).default(this.concurrency);
 
     try {
-      const novel = await parser.getNovelInfo(url);
+      const novel = await parser.getNovelInfo(url, chapterLimit);
       if (chapterLimit) novel.chapters = novel.chapters.slice(0, chapterLimit);
 
       const total = novel.chapters.length;
